@@ -158,31 +158,32 @@ def main(seed, lr, gamma, lamda, total_steps, kappa_value, debug, overshooting_i
     torch.manual_seed(seed); np.random.seed(seed)
     env = ETTEnvironment()
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = ObservationTraces(env, beta=0.9999)
+    env = ObservationTraces(env, beta=0.999)
     env = NormalizeObservation(env)
     env = ScaleReward(env, gamma=gamma)
     agent = StreamTD(n_obs=env.observation_space.shape[0], lr=lr, gamma=gamma, lamda=lamda, kappa_value=kappa_value)
     if debug:
         print("seed: {}".format(seed), "env: {}".format(env.spec.id))
     s, _ = env.reset()
-    episodic_return = 0
-    errors, predictions, actual_returns = [], [], []
-    for t in range(1, total_steps+1):
-        s_prime, c, terminated, _, info = env.step(None)
+    cumulants, predictions = [], []
+    for _ in range(total_steps):
+        s_prime, c, terminated, _, _ = env.step(None)
         agent.update_params(s, c, s_prime, terminated, overshooting_info=overshooting_info)
         s = s_prime
-        episodic_return = gamma * episodic_return + c * np.sqrt(env.reward_stats.var+ 1e-8).squeeze()
-        prediction = agent.predict(s) * np.sqrt(env.reward_stats.var + 1e-8).squeeze()
-        error = (episodic_return - prediction) ** 2
-        errors.append(error)
-        predictions.append(prediction)
-        actual_returns.append(episodic_return)
+        predictions.append(agent.predict(s) * np.sqrt(env.reward_stats.var + 1e-8).squeeze())
+        cumulants.append(c * np.sqrt(env.reward_stats.var + 1e-8).squeeze())
         if terminated:
             s, _ = env.reset()
             break
-        if debug and t % 1000 == 0:
-            print("Episodic Return: {}, Prediction: {}, Time Step {}, Error {}".format(episodic_return, prediction, t, error))
     env.close()
+
+    # compute actual returns using formula: G_t = r_t + gamma * G_{t+1} starting with G_T = 0
+    reversed_actual_returns = []
+    return_t = 0
+    for t in reversed(range(total_steps)):
+        return_t = return_t * gamma + cumulants[t]
+        reversed_actual_returns.append(return_t)
+    actual_returns = list(reversed(reversed_actual_returns))
 
     plt.figure(figsize=(12, 4))
     plt.plot(actual_returns, label="Actual Return", linewidth=3.0, color="tab:green")
