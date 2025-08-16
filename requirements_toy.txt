@@ -1,0 +1,13 @@
+gymnasium==1.1.1
+torch==2.3.0
+imageio==2.34.1
+numpy==1.26.4
+tyro
+tensorboard
+pandas==2.2.2
+matplotlib==3.8.4
+opencv-python==4.9.0.80
+seaborn==0.13.2
+Shimmy==0.2.1
+wandb
+psutil
