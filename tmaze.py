@@ -35,7 +35,7 @@ class TMazeBase(gym.Env):
         self.add_timestep = add_timestep
 
         self.action_space = gym.spaces.Discrete(4)
-        self.action_mapping = [[1, 0], [0, 1], [-1, 0], [0, -1]]
+        self.action_mapping = [[1, 0], [0, 1], [-1, 0], [0, -1]] # right, up, left, down
 
         self.tmaze_map = np.zeros(
             (3 + 2, self.oracle_length + self.corridor_length + 1 + 2), dtype=bool
@@ -47,6 +47,7 @@ class TMazeBase(gym.Env):
         obs_dim = 2 if self.ambiguous_position else 3
         if self.expose_goal:
             assert self.ambiguous_position is False
+            obs_dim = 4
         if self.add_timestep:
             obs_dim += 1
 
@@ -71,11 +72,12 @@ class TMazeBase(gym.Env):
                 return [1, y]
         else:
             if self.expose_goal:
-                return [x, y, goal_y if self.oracle_visited else 0]
-            if x == 0:
-                return [x, y, exposure]
+                return [x, y, self.corridor_length == x, goal_y if self.oracle_visited else 0]
             else:
-                return [x, y, 0]
+                if x == 0:
+                    return [x, y, exposure]
+                else:
+                    return [x, y, 0]
 
     def timestep_encoding(self):
         return [self.time_step] if self.add_timestep else []
@@ -145,6 +147,21 @@ class TMazeClassicToy(TMazeBase):
             corridor_length=corridor_length,
             goal_reward=goal_reward,
             penalty=penalty,
+            distract_reward=distract_reward,
+            expose_goal=True,
+            ambiguous_position=False,
+            add_timestep=False,
+        )
+
+class TMazeClassicEasy(TMazeBase):
+    def __init__(
+        self, corridor_length: int = 49, goal_reward: float = 1.0, penalty: float = 0.0, distract_reward: float = 0.0
+    ):
+        super().__init__(
+            episode_length=corridor_length + 1,
+            corridor_length=corridor_length,
+            goal_reward=goal_reward,
+            penalty=-1.0/corridor_length,
             distract_reward=distract_reward,
             expose_goal=True,
             ambiguous_position=False,
