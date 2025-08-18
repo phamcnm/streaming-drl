@@ -9,7 +9,7 @@ from optim import ObGD as Optimizer
 from time_wrapper import AddTimeInfo
 from normalization_wrappers import NormalizeObservation, ScaleReward
 from sparse_init import sparse_init
-from tmaze import TMazeClassicToy, TMazeClassicActive, TMazeClassicPassive
+from tmaze import TMazeClassicToy, TMazeClassicActive, TMazeClassicPassive, TMazeClassicEasy
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 
@@ -21,9 +21,14 @@ def initialize_weights(m):
     if isinstance(m, nn.Linear):
         sparse_init(m.weight, sparsity=0.9)
         m.bias.data.fill_(0.0)
+    if isinstance(m, NoisyLinear):
+        sparse_init(m.weight_mu, sparsity=0.9)
+        # sparse_init(m.weight_sigma, sparsity=0.1)
+        m.bias_mu.data.fill_(0.0)
+        # m.bias_sigma.data.fill_(0.0)
 
 class StreamQ(nn.Module):
-    def __init__(self, n_obs=11, n_actions=3, hidden_size=32, lr=1.0, epsilon_target=0.01, epsilon_start=1.0, exploration_fraction=0.1, total_steps=1_000_000, gamma=0.99, lamda=0.8, kappa_value=2.0):
+    def __init__(self, n_obs=11, n_actions=3, hidden_size=64, lr=1.0, epsilon_target=0.01, epsilon_start=1.0, exploration_fraction=0.1, total_steps=1_000_000, gamma=0.99, lamda=0.8, kappa_value=2.0):
         super(StreamQ, self).__init__()
         self.n_actions = n_actions
         self.gamma = gamma
@@ -36,8 +41,8 @@ class StreamQ(nn.Module):
         self.fc1_v   = nn.Linear(n_obs, hidden_size)
         self.hidden_v  = nn.Linear(hidden_size, hidden_size)
 
-        self.value_head = NoisyLinear(hidden_size, 1, std_init=0.8)
-        self.advantage_head = NoisyLinear(hidden_size, self.n_actions, std_init=0.8)
+        self.value_head = NoisyLinear(hidden_size, 1, std_init=1.0)
+        self.advantage_head = NoisyLinear(hidden_size, self.n_actions, std_init=1.0)
 
         self.apply(initialize_weights)
         self.optimizer = Optimizer(list(self.parameters()), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa_value)
@@ -100,6 +105,11 @@ class NoisyLinear(nn.Module):
         self.bias_mu = nn.Parameter(torch.FloatTensor(out_features))
         self.bias_sigma = nn.Parameter(torch.FloatTensor(out_features))
         self.register_buffer("bias_epsilon", torch.FloatTensor(out_features))
+
+        # tracking exploration strength
+        self._exploration_sum = 0.0
+        self._exploration_count = 0
+
         # factorized gaussian noise
         self.reset_parameters()
         self.reset_noise()
@@ -122,7 +132,23 @@ class NoisyLinear(nn.Module):
         else:
             weight = self.weight_mu
             bias = self.bias_mu
+
+        # tracking exploration strength
+        with torch.no_grad():
+            exploration_strength = (self.weight_sigma.abs().mean() + self.bias_sigma.abs().mean()) / 2
+            self._exploration_sum += exploration_strength.item()
+            self._exploration_count += 1
+
         return F.linear(input, weight, bias)
+    
+    def get_and_reset_exploration(self):
+        """Return mean exploration strength since last reset and clear counters."""
+        if self._exploration_count == 0:
+            return 0.0
+        avg_strength = self._exploration_sum / self._exploration_count
+        self._exploration_sum = 0.0
+        self._exploration_count = 0
+        return avg_strength
 
 def create_env(env_name, render=False):
     if env_name == "TMazeClassicToy":
@@ -131,6 +157,8 @@ def create_env(env_name, render=False):
         env = TMazeClassicPassive()
     elif env_name == "TMazeClassicActive":
         env = TMazeClassicActive()
+    elif env_name == "TMazeClassicEasy":
+        env = TMazeClassicEasy()
     else:
         env = gym.make(env_name, render_mode='human', max_episode_steps=10_000) if render else gym.make(env_name, max_episode_steps=10_000)
     return env
@@ -143,7 +171,7 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = ScaleReward(env, gamma=gamma)
     env = NormalizeObservation(env)
-    # env = AddTimeInfo(env)
+    env = AddTimeInfo(env)
     agent = StreamQ(n_obs=env.observation_space.shape[0], n_actions=env.action_space.n, lr=lr, gamma=gamma, lamda=lamda, epsilon_target=epsilon_target, epsilon_start=epsilon_start, exploration_fraction=exploration_fraction, total_steps=total_steps, kappa_value=kappa_value)
     save_dir = "data_stream_q_{}_lr{}_gamma{}_lamda{}".format(env_name, lr, gamma, lamda)
     if debug:
@@ -176,9 +204,11 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_
         s = s_prime
         if terminated or truncated:
             total_return = info['episode']['r']
-            success += 1 if total_return > 0 else 0
-            failure += 1 if total_return <= 0 else 0
-            cumulative_return += total_return
+            if total_return >= 1:
+                success += 1
+                cumulative_return += 1
+            else:
+                failure += 1
             if t % 1000 == 0:
                 writer.add_scalar("charts/cumulative_return", cumulative_return, t)
             writer.add_scalar("charts/episodic_return", total_return, t)
@@ -190,7 +220,9 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_
             s, _ = env.reset()
             episode_num += 1
         if t % 10000 == 0:
-            print("Cumulative Return: {}, Time Step {}, Episode Number {}, Epsilon {}, Success {}/{}".format(cumulative_return, t, episode_num, agent.epsilon, success, success + failure))
+            value_exploration_strength = agent.value_head.get_and_reset_exploration()
+            advantage_exploration_strength = agent.advantage_head.get_and_reset_exploration()
+            print("Cumulative Return: {}, Time Step {}, Episode Number {}, Success {}/{}, Exploration {} | {}".format(cumulative_return, t, episode_num, success, success + failure, value_exploration_strength, advantage_exploration_strength))
             success, failure = 0, 0
     env.close()
     if not os.path.exists(save_dir):
@@ -200,7 +232,7 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Stream Q(λ)')
-    parser.add_argument('--env_name', type=str, default='TMazeClassicToy')
+    parser.add_argument('--env_name', type=str, default='TMazeClassicEasy')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--lr', type=float, default=1.0)
     parser.add_argument('--gamma', type=float, default=0.99)
