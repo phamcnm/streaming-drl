@@ -13,10 +13,6 @@ from tmaze import TMazeClassicToy, TMazeClassicActive, TMazeClassicPassive, TMaz
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 
-def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
-    slope = (end_e - start_e) / duration
-    return max(slope * t + start_e, end_e)
-
 def initialize_weights(m):
     if isinstance(m, nn.Linear):
         sparse_init(m.weight, sparsity=0.9)
@@ -28,16 +24,10 @@ def initialize_weights(m):
         # m.bias_sigma.data.fill_(0.0)
 
 class StreamQ(nn.Module):
-    def __init__(self, n_obs=11, n_actions=3, hidden_size=64, lr=1.0, epsilon_target=0.01, epsilon_start=1.0, exploration_fraction=0.1, total_steps=1_000_000, gamma=0.99, lamda=0.8, kappa_value=2.0):
+    def __init__(self, n_obs=11, n_actions=3, hidden_size=64, lr=1.0, gamma=0.99, lamda=0.8, kappa_value=2.0):
         super(StreamQ, self).__init__()
         self.n_actions = n_actions
         self.gamma = gamma
-        self.epsilon_start = epsilon_start
-        self.epsilon_target = epsilon_target
-        self.epsilon = epsilon_start
-        self.exploration_fraction = exploration_fraction
-        self.total_steps = total_steps
-        self.time_step = 0
         self.fc1_v   = nn.Linear(n_obs, hidden_size)
         self.hidden_v  = nn.Linear(hidden_size, hidden_size)
 
@@ -150,30 +140,33 @@ class NoisyLinear(nn.Module):
         self._exploration_count = 0
         return avg_strength
 
-def create_env(env_name, render=False):
+def create_env(env_name, corridor_length=9, render=False):
     if env_name == "TMazeClassicToy":
-        env = TMazeClassicToy()
+        env = TMazeClassicToy(corridor_length=corridor_length)
     elif env_name == "TMazeClassicPassive":
-        env = TMazeClassicPassive()
+        env = TMazeClassicPassive(corridor_length=corridor_length)
     elif env_name == "TMazeClassicActive":
-        env = TMazeClassicActive()
+        env = TMazeClassicActive(corridor_length=corridor_length)
     elif env_name == "TMazeClassicEasy":
-        env = TMazeClassicEasy()
+        env = TMazeClassicEasy(corridor_length=corridor_length)
     else:
         env = gym.make(env_name, render_mode='human', max_episode_steps=10_000) if render else gym.make(env_name, max_episode_steps=10_000)
     return env
 
-def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_start, exploration_fraction, kappa_value, debug, overshooting_info, render=False, track=False):
+def main(env_name, corridor_length, seed, lr, gamma, lamda, total_steps, kappa_value, hidden_size, debug, overshooting_info, render=False, track=False):
     torch.manual_seed(seed); np.random.seed(seed)
     # env = gym.make(env_name, render_mode='human', max_episode_steps=10_000) if render else gym.make(env_name, max_episode_steps=10_000)
-    env = create_env(env_name, render)
+    env = create_env(env_name, corridor_length, render)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = ScaleReward(env, gamma=gamma)
     env = NormalizeObservation(env)
     env = AddTimeInfo(env)
-    agent = StreamQ(n_obs=env.observation_space.shape[0], n_actions=env.action_space.n, lr=lr, gamma=gamma, lamda=lamda, epsilon_target=epsilon_target, epsilon_start=epsilon_start, exploration_fraction=exploration_fraction, total_steps=total_steps, kappa_value=kappa_value)
-    save_dir = "data_stream_q_{}_lr{}_gamma{}_lamda{}".format(env_name, lr, gamma, lamda)
+    agent = StreamQ(n_obs=env.observation_space.shape[0], n_actions=env.action_space.n, hidden_size=hidden_size, lr=lr, gamma=gamma, lamda=lamda, kappa_value=kappa_value)
+    num_params = sum(p.numel() for p in agent.parameters() if p.requires_grad)
+    print("Number of parameters:", num_params)
+    save_dir = "data_stream_q_duelingnoisy_{}_h_{}".format(env_name + '-' + str(corridor_length), hidden_size)
+    print("Save Directory:", save_dir)
     if debug:
         print("seed: {}".format(seed), "env: {}".format(env_name))
     if track:
@@ -233,18 +226,17 @@ def main(env_name, seed, lr, gamma, lamda, total_steps, epsilon_target, epsilon_
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Stream Q(λ)')
     parser.add_argument('--env_name', type=str, default='TMazeClassicEasy')
+    parser.add_argument('--corridor_length', type=int, default=49, help='Length of the corridor in the TMaze environment')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--lr', type=float, default=1.0)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--lamda', type=float, default=0.8)
-    parser.add_argument('--epsilon_target', type=float, default=0.01)
-    parser.add_argument('--epsilon_start', type=float, default=1.0)
-    parser.add_argument('--exploration_fraction', type=float, default=0.5)
     parser.add_argument('--kappa_value', type=float, default=2.0)
     parser.add_argument('--total_steps', type=int, default=2_000_000)
+    parser.add_argument('--hidden_size', type=int, default=32)
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--overshooting_info', action='store_true')
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--track', action='store_true')
     args = parser.parse_args()
-    main(args.env_name, args.seed, args.lr, args.gamma, args.lamda, args.total_steps, args.epsilon_target, args.epsilon_start, args.exploration_fraction, args.kappa_value, args.debug, args.overshooting_info, args.render)
+    main(args.env_name, args.corridor_length, args.seed, args.lr, args.gamma, args.lamda, args.total_steps, args.kappa_value, args.hidden_size, args.debug, args.overshooting_info, args.render)

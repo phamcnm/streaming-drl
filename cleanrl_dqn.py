@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from torch.utils.tensorboard import SummaryWriter
-from tmaze import TMazeClassicActive, TMazeClassicPassive, TMazeClassicToy
+from tmaze import TMazeClassicActive, TMazeClassicPassive, TMazeClassicToy, TMazeClassicEasy
 
 from cleanrl_buffers import ReplayBuffer
 
@@ -44,21 +44,23 @@ class Args:
     """the user or org name of the model repository from the Hugging Face Hub"""
 
     # Algorithm specific arguments
-    env_id: str = "TMazeClassicToy"
+    env_id: str = "TMazeClassicEasy"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    corridor_length: int = 49
+    """the length of the corridor in the TMaze environment"""
+    total_timesteps: int = 2_000_000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments"""
-    buffer_size: int = 10000
+    buffer_size: int = 500_000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 500
+    target_network_frequency: int = 50_000
     """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
@@ -74,15 +76,17 @@ class Args:
     """the frequency of training"""
 
 
-def make_env(env_id, seed, idx, capture_video, run_name):
+def make_env(env_id, seed, idx, capture_video, run_name, corridor_length=9):
     def thunk():
         # Select the right environment class or Gym id
-        if env_id == 'TMazeClassicActive':
-            env = TMazeClassicActive()
-        elif env_id == 'TMazeClassicPassive':
-            env = TMazeClassicPassive()
-        elif env_id == 'TMazeClassicToy':
-            env = TMazeClassicToy()
+        if env_id == "TMazeClassicToy":
+            env = TMazeClassicToy(corridor_length=corridor_length)
+        elif env_id == "TMazeClassicPassive":
+            env = TMazeClassicPassive(corridor_length=corridor_length)
+        elif env_id == "TMazeClassicActive":
+            env = TMazeClassicActive(corridor_length=corridor_length)
+        elif env_id == "TMazeClassicEasy":
+            env = TMazeClassicEasy(corridor_length=corridor_length)
         else:
             env = gym.make(env_id)
 
@@ -151,7 +155,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+        [make_env(args.env_id, args.seed + i, i, args.capture_video, run_name, corridor_length=args.corridor_length) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
@@ -174,7 +178,7 @@ if __name__ == "__main__":
 
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
-    for global_step in range(args.total_timesteps):
+    for global_step in range(1, args.total_timesteps+1):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
         if random.random() < epsilon:
@@ -185,17 +189,6 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        if terminations or truncations:
-            if infos["episode"]["r"].item() == 1:
-                cumulative_return += 1
-                success += 1
-            else:
-                failure += 1
-                    # print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
-                    # writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                    # writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
 
         # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
         real_next_obs = next_obs.copy()
@@ -234,6 +227,14 @@ if __name__ == "__main__":
                     target_network_param.data.copy_(
                         args.tau * q_network_param.data + (1.0 - args.tau) * target_network_param.data
                     )
+        
+        if terminations or truncations:
+            if infos["episode"]["r"].item() >= 1:
+                success += 1
+                cumulative_return += 1
+            else:
+                failure += 1
+            obs, _ = envs.reset()
         
         if global_step % 10000 == 0:
             print("Cumulative Return: {}, Time Step {}, Success {}/{}".format(cumulative_return, global_step, success, success + failure))
