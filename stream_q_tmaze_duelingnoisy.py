@@ -207,12 +207,14 @@ def main(env_name, corridor_length, seed, lr, gamma, lamda, total_steps, kappa_v
             writer.add_scalar("charts/episodic_return", total_return, t)
             if debug and total_return > 0:
                 print("Episodic Return: {}, Time Step {}, Episode Number {}, Epsilon {}".format(total_return, t, episode_num, agent.epsilon))
-            returns.append(total_return)
-            term_time_steps.append(t)
+            # returns.append(total_return)
+            # term_time_steps.append(t)
             terminated, truncated = False, False
             s, _ = env.reset()
             episode_num += 1
         if t % 10000 == 0:
+            returns.append(success)
+            term_time_steps.append(t)
             value_exploration_strength = agent.value_head.get_and_reset_exploration()
             advantage_exploration_strength = agent.advantage_head.get_and_reset_exploration()
             print("Cumulative Return: {}, Time Step {}, Episode Number {}, Success {}/{}, Exploration {} | {}".format(cumulative_return, t, episode_num, success, success + failure, value_exploration_strength, advantage_exploration_strength))

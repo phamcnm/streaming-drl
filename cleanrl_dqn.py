@@ -1,5 +1,5 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/dqn/#dqnpy
-import os
+import os, pickle
 import random
 import time
 from dataclasses import dataclass
@@ -144,6 +144,10 @@ if __name__ == "__main__":
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
+    env_name = args.env_id + '-' + str(args.corridor_length)
+    save_dir = "data_dqn_{}".format(env_name)
+    print("Save Directory:", save_dir)
+    returns, term_time_steps = [], []
 
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
@@ -237,8 +241,15 @@ if __name__ == "__main__":
             obs, _ = envs.reset()
         
         if global_step % 10000 == 0:
+            returns.append(success)
+            term_time_steps.append(global_step)
             print("Cumulative Return: {}, Time Step {}, Success {}/{}".format(cumulative_return, global_step, success, success + failure))
             success, failure = 0, 0
 
     envs.close()
     writer.close()
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    with open(os.path.join(save_dir, "seed_{}.pkl".format(args.seed)), "wb") as f:
+        pickle.dump((returns, term_time_steps, env_name), f)

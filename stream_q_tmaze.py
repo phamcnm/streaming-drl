@@ -182,12 +182,14 @@ def main(env_name, corridor_length, seed, lr, gamma, lamda, total_steps, action_
             writer.add_scalar("charts/episodic_return", total_return, t)
             if debug and total_return > 0:
                 print("Episodic Return: {}, Time Step {}, Episode Number {}, Epsilon {}".format(total_return, t, episode_num, agent.epsilon))
-            returns.append(total_return)
-            term_time_steps.append(t)
+            # returns.append(total_return)
+            # term_time_steps.append(t)
             terminated, truncated = False, False
             s, _ = env.reset()
             episode_num += 1
         if t % 10000 == 0:
+            returns.append(success)
+            term_time_steps.append(t)
             action_selection_status = "%s %f" % ("Epsilon" if action_selection == 'epsilon_greedy' else "Tau", agent.epsilon if action_selection == 'epsilon_greedy' else agent.get_tau())
             print("Cumulative Return: {}, Time Step {}, Episode Number {}, {}, Success {}/{}".format(cumulative_return, t, episode_num, action_selection_status, success, success + failure))
             success, failure = 0, 0
